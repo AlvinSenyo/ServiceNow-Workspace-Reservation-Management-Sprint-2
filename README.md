@@ -1,5 +1,5 @@
 # ServiceNow-Workspace-Reservation-Management-Sprint-2
-An extension of the Sprint 1 WRM scoped application that automates the full reservation lifecycle — client-side validation, Flow Designer approval routing, Discord notifications, role-based ACLs, email confirmations, SLA tracking, and a self-service bulk workspace import.
+An extension of the Sprint 1 WRM scoped application that automates the full reservation lifecycle client-side validation, Flow Designer approval routing, Discord notifications, role-based ACLs, email confirmations, SLA tracking, and a self-service bulk workspace import.
 
 **Product:** ServiceNow Scoped Application — Flow Designer + Import Framework  
 **Release:** ServiceNow Zurich  
@@ -29,7 +29,7 @@ Sprint 1 built the foundation — tables, roles, modules, UI Policies, UI Action
 
 ## 🏛️ Architecture
 
-**Flow Designer First.** All multi-step automation lives in Flow Designer — logic is visible, maintainable, and role-aware. The `Workspace Reservation` flow handles the full approval lifecycle. The `WRM Bulk Import Trigger` flow handles file ingestion.
+**Flow Designer First.** All multi-step automation lives in Flow Designer logic is visible, maintainable, and role-aware. The `Workspace Reservation` flow handles the full approval lifecycle. The `WRM Bulk Import Trigger` flow handles file ingestion.
 
 **Script Include Pattern.** The Discord integration is encapsulated in a reusable `discordNotification` Script Include (scoped). Two custom Flow Actions call it with the right message and emoji. Adding a third notification in the future means writing one new Action — the delivery logic is never touched.
 
@@ -50,9 +50,7 @@ Sprint 1 built the foundation — tables, roles, modules, UI Policies, UI Action
 | File | Description |
 | :--- | :--- |
 | `Technical_Manual_WRM_Sprint2_v4.txt` | Click-by-click build guide for all 7 stories with Option A/B, complete scripts, and verification checklists |
-| `WRM-Sprint2-Implementation-Guide-v4.docx` | Formatted step-by-step guide with navigation boxes, field tables, and production-ready scripts |
 | `WRM_Workspace_Bulk_Import_Sample.xlsx` | 10-row sample Excel file for testing Story 21. Headers match the import staging table column names exactly |
-| `README.md` | This file |
 
 ---
 
@@ -163,7 +161,7 @@ Sprint 1 built the foundation — tables, roles, modules, UI Policies, UI Action
 ## 💡 Key Features
 
 ### Client-Side Date Validation (Story 15)
-An `onChange` Catalog Client Script fires the moment the user sets End date/time. If End is before Start, an inline error fires and the End field clears — in real time, before Submit is clicked. Location auto-populates from the selected workspace via a `javascript:` Default value expression — no separate client script record required.
+An `onChange` Catalog Client Script fires the moment the user sets End date/time. If End is before Start, an inline error fires and the End field clears in real time, before Submit is clicked. Location auto-populates from the selected workspace via a `javascript:` Default value expression — no separate client script record required.
 
 ### Automated Reservation Flow (Story 16)
 Triggered by catalog submission. Routes approval to the Workspace Agents group. On approval: creates the WRT record first (so the sys_id exists for the Discord link), fires the Discord ✅ message with a clickable link, then closes the RITM as Closed Complete. On rejection: fires the Discord ❌ message, closes the RITM as Closed Incomplete, and sends a rejection email.
