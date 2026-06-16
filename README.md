@@ -31,7 +31,7 @@ Sprint 1 built the foundation — tables, roles, modules, UI Policies, UI Action
 
 **Flow Designer First.** All multi-step automation lives in Flow Designer logic is visible, maintainable, and role-aware. The `Workspace Reservation` flow handles the full approval lifecycle. The `WRM Bulk Import Trigger` flow handles file ingestion.
 
-**Script Include Pattern.** The Discord integration is encapsulated in a reusable `discordNotification` Script Include (scoped). Two custom Flow Actions call it with the right message and emoji. Adding a third notification in the future means writing one new Action — the delivery logic is never touched.
+**Script Include Pattern.** The Discord integration is encapsulated in a reusable `discordNotification` Script Include (scoped). Two custom Flow Actions call it with the right message and emoji. Adding a third notification in the future means writing one new Action the delivery logic is never touched.
 
 **System Property for Config.** The Discord webhook URL lives in a System Property (`x_#####_wrm.discord.webhook_url`), not in code. Rotating the URL means updating one record.
 
@@ -41,7 +41,7 @@ Sprint 1 built the foundation — tables, roles, modules, UI Policies, UI Action
 
 **Notification over Scripting.** Email notifications for Stories 18 and 20 use the platform Notification engine with dot-walking variable substitution — no Business Rules or email scripts required.
 
-**Tracker Record Before Discord.** In the approval flow, the Reservation Tracker (WRT) record is created **before** the Discord notification fires. The approval message includes a clickable link to the WRT record — which requires the record's `sys_id` to exist first.
+**Tracker Record Before Discord.** In the approval flow, the Reservation Tracker (WRT) record is created **before** the Discord notification fires. The approval message includes a clickable link to the WRT record which requires the record's `sys_id` to exist first.
 
 ---
 
@@ -113,7 +113,7 @@ Sprint 1 built the foundation — tables, roles, modules, UI Policies, UI Action
          │
          ▼
   RITM Created (sc_req_item)
-  SLA clock starts ── 4 business hours
+  SLA clock starts 4 business hours
          │
          ▼
   Flow Designer: Workspace Reservation triggers
