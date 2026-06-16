@@ -1,0 +1,1865 @@
+================================================================================
+TECHNICAL MANUAL: WORKSPACE RESERVATION MANAGEMENT - SPRINT 2  (VERSION 4)
+ServiceNow Zurich Release | AdvanceNow(TM) LLC
+Written for: Complete Beginners — Zero ServiceNow or IT Experience Required
+================================================================================
+
+HOW TO READ THIS MANUAL
+------------------------
+This manual assumes you have never used ServiceNow before. Every term is
+explained the first time it appears. Read steps in order — do not skip ahead.
+Every "Verify:" line is a checkpoint. Do not continue past it until it passes.
+
+OPTION A vs OPTION B:
+  Option A: The Configuration Method (Recommended)
+    Uses the native ServiceNow UI — fills in form fields, clicks buttons,
+    sets values. No separate script records are created. This is the
+    preferred approach because it is easier to understand, easier to
+    maintain, and uses built-in platform features.
+
+  Option B: The Scripting Alternative
+    Uses JavaScript code to achieve the same result. Use this when
+    Option A has a limitation for your specific scenario, or when you
+    want full dynamic control. The script approach is explained so you
+    understand what is happening under the hood.
+
+When both options are shown, always try Option A first. If it works, stop there.
+
+What is a PDI?
+  A PDI (Personal Developer Instance) is a free private ServiceNow
+  environment from developer.servicenow.com. Request the Zurich release.
+  Everything you build is isolated — you cannot break anyone else's system.
+
+What is the Filter Navigator?
+  The search bar at the top-left of every ServiceNow page. Type a shortcut
+  like `sys_properties.list` and press Enter to jump directly there.
+
+Replace x_#####_wrm everywhere:
+  To find your prefix: type `sys_app.list` > open Workspace Reservation
+  Management > read the Scope field (e.g., x_abcde12_wrm).
+
+
+================================================================================
+1. PROJECT OVERVIEW
+================================================================================
+Objective : Extend the Sprint 1 WRM application with automation, validation,
+            security, notifications, SLA tracking, and bulk import.
+Scope     : x_#####_wrm (your instance prefix)
+Release   : ServiceNow Zurich
+Stories   : 15 through 21
+
+PREREQUISITE: Sprint 1 must be fully deployed. The three WRM tables,
+three roles (wrm_user, wrm_admin, wrm_agent), and the Workspace Reservation
+Request catalog item must all exist and be working before starting Sprint 2.
+
+New artifacts created in Sprint 2:
+  Group           : Workspace Agents
+  System Property : x_#####_wrm.discord.webhook_url
+  Script Include  : discordNotification  (scoped — WRM)
+  Script Include  : importOnDemand       (GLOBAL scope — Story 21 only)
+  Flow Action     : Send Discord Approval Notification
+  Flow Action     : Send Discord Rejection Notification
+  Flow Action     : Import Workspace Data
+  Flow            : Workspace Reservation
+  Flow            : WRM Bulk Import Trigger
+  Catalog Client Script: Validate Reservation Dates
+  ACL records     : Read/Create/Write/Delete on all three WRM tables
+  Notification    : Workspace Reservation Confirmation
+  Notification    : Workspace Check Required - Checked Out
+  Notification    : Workspace Bulk Import Complete
+  SLA Definition  : Workspace Reservation Fulfillment SLA
+  SLA Workflow    : WRM Reservation SLA Workflow  (cloned from Default)
+  Data Source     : WRM Workspace Options Bulk Import
+  Transform Map   : WRM Workspace Options Bulk Transform
+  Catalog Item    : Workspace Options Bulk Update
+
+
+================================================================================
+2. UPDATE SET WORKFLOW — DO THIS BEFORE EVERY STORY
+================================================================================
+An Update Set is a container that records every configuration change you make.
+Think of it as a save file for your work. Create one before every story.
+
+How to create an update set:
+  1. Type `sys_update_set.list` into the Filter Navigator. Click [New].
+  2. Name       : WRM STRY0015 Catalog Reservation Validation
+                  (change for each story — see list below)
+  3. Application: Workspace Reservation Management
+                  CRITICAL — do NOT leave this as Global.
+  4. Click [Submit and Make Current].
+  5. Confirm the top-right banner shows your new update set name.
+
+Naming convention for Sprint 2:
+  WRM STRY0015 Catalog Reservation Validation
+  WRM STRY0016 Request Workspace Reservation Flow
+  WRM STRY0017 ACL Updates
+  WRM STRY0018 Reservation Confirmation Notification
+  WRM STRY0019 Fulfillment SLA
+  WRM STRY0020 Check-Out Notification
+  WRM STRY0021 Bulk Import on Demand
+
+
+================================================================================
+3. PHASE 1: CATALOG RESERVATION VALIDATION (STORY 15)
+================================================================================
+Update Set: WRM STRY0015 Catalog Reservation Validation
+
+What this story does:
+  Adds two enhancements to the Workspace Reservation Request catalog form:
+  1. A real-time error when End date/time is set before Start date/time.
+  2. Location field auto-fills when the user picks a workspace.
+
+------------------------------------------------------------------------
+BACKGROUND: WHAT IS A CATALOG CLIENT SCRIPT?
+------------------------------------------------------------------------
+A Catalog Client Script is JavaScript that runs in the user's browser
+the instant a field changes — before anything is saved to the server.
+It makes the form respond in real time.
+
+Three script types:
+  onChange  — Runs when a specific variable's value changes.
+  onLoad    — Runs when the form first opens.
+  onSubmit  — Runs when the user clicks Submit.
+
+The g_form object is available automatically in all client scripts:
+  g_form.getValue('variable_name')             — reads a field's current value
+  g_form.clearValue('variable_name')           — empties a field
+  g_form.showFieldMsg('name','msg','error')     — shows a red error below a field
+  g_form.clearMessages()                        — removes all error messages
+  g_form.setValue('variable_name', value)       — sets a field value
+
+------------------------------------------------------------------------
+STEP 3.1: ACTIVATE THE UPDATE SET
+------------------------------------------------------------------------
+Create and activate WRM STRY0015 Catalog Reservation Validation.
+Confirm the top-right banner matches before making any changes.
+
+------------------------------------------------------------------------
+STEP 3.2: DATE VALIDATION CLIENT SCRIPT
+------------------------------------------------------------------------
+There is no purely click-and-configure way to compare two date fields
+in real time on a catalog form in ServiceNow Zurich. A client script
+is the right tool. Two options differ only in WHEN the validation fires.
+
+  OPTION A: onChange — Validates the Moment the User Changes End Date
+  (RECOMMENDED — real-time feedback, best user experience)
+  -------------------------------------------------------------------
+  Navigate: [All] > [Service Catalog] > [Catalog Client Scripts] > [New]
+  OR type: `catalog_script_client.list` — Click [New].
+
+  Field          Value
+  -------------- -------------------------------------------------------
+  Name           Validate Reservation Dates
+  Catalog item   Workspace Reservation Request
+  UI Type        All
+  Type           onChange
+  Variable name  end_date_time
+  Active         Checked
+  Application    Workspace Reservation Management
+
+  Script:
+
+    function onChange(control, oldValue, newValue, isLoading) {
+
+    // Exit during form load or if the field was manually cleared by the user.
+    if (isLoading || newValue === '') {
+        return;
+    }
+
+    // Clear messages at the start of a fresh user interaction
+    g_form.clearMessages();
+
+    // Fetch the value of the start date field to compare against
+    var start = g_form.getValue('start_date_time');
+
+    // Nothing to compare if Start has not been set yet.
+    if (start === '' || start === null) {
+        return;
+    }
+
+    // ServiceNow dates are YYYY-MM-DD HH:MM:SS — sortable strings.
+    // newValue < start means End is chronologically before Start.
+    if (newValue < start) {
+        
+        // 1. Instantly clear the invalid value from the field.
+        // This triggers the recursive loop immediately, which exits at the top check.
+        g_form.clearValue('end_date_time');
+        
+        // 2. Wrap the message in a 0ms setTimeout.
+        // This pushes the message rendering to the very end of the browser's execution queue,
+        // ensuring it prints AFTER ServiceNow finishes clearing the field and wiping the UI.
+        setTimeout(function() {
+            g_form.showFieldMsg(
+                'end_date_time',
+                'End date/time should not be before the Start date/time.',
+                'error'
+            );
+        }, 0); 
+    }
+}
+
+  Click [Submit].
+
+  WHY onChange IS RECOMMENDED:
+  The error fires the moment the user selects a bad end time — they see
+  the problem instantly and fix it before clicking Submit.
+
+  -----------------------------------------------------------------------
+  OPTION B: onSubmit — Validates Only When the User Clicks Submit
+  (Simpler — use if you want to minimize client scripts)
+  -----------------------------------------------------------------------
+  Same navigation as Option A. Change these fields:
+
+  Field          Value
+  -------------- -------------------------------------------------------
+  Type           onSubmit
+  Variable name  (leave blank — onSubmit fires globally, not per variable)
+
+  Script:
+
+    function onSubmit() {
+        var start = g_form.getValue('start_date_time');
+        var end   = g_form.getValue('end_date_time');
+        if (start && end && end < start) {
+            g_form.addErrorMessage(
+                'End date/time should not be before the Start date/time.'
+            );
+            return false;  // Blocks form submission
+        }
+    }
+
+  LIMITATION: User fills in the full form, clicks Submit, then sees the
+  error. Option A catches it in real time before Submit is ever clicked.
+
+------------------------------------------------------------------------
+STEP 3.3: LOCATION AUTO-POPULATE
+------------------------------------------------------------------------
+When a user picks a workspace on the catalog form, the Location field
+should auto-fill from that workspace's Location field.
+
+  OPTION A: Configuration Method — No Script Record Created (RECOMMENDED)
+  -------------------------------------------------------------------
+  Uses the native Default value capability on the Location variable.
+  The javascript: prefix tells ServiceNow to evaluate the expression
+  at runtime. No separate client script record is created.
+
+  1. Type `sc_cat_item.list` into the Filter Navigator.
+     Open the Workspace Reservation Request catalog item.
+  2. Click the [Variables] tab. Open the Location variable record.
+  3. Set these two fields:
+       Default value : javascript:current.variables.select_workspace.location
+       Read only     : Checked
+  4. Click [Update].
+
+  What this expression does:
+    current.variables.select_workspace.location
+    reads the Location field from the workspace the user selected.
+
+  KNOWN LIMITATION: The expression evaluates when the form first loads.
+  If the user changes their workspace selection after the form opens,
+  Location does NOT auto-update. For users who pick once and submit,
+  this is acceptable. If you need dynamic updating, use Option B.
+
+  -----------------------------------------------------------------------
+  OPTION B: onChange Client Script — Dynamic, Updates on Every Change
+  -----------------------------------------------------------------------
+  Navigate: `catalog_script_client.list` — Click [New].
+
+  Field          Value
+  -------------- -------------------------------------------------------
+  Name           Auto-Populate Location from Workspace
+  Catalog item   Workspace Reservation Request
+  UI Type        All
+  Type           onChange
+  Variable name  select_workspace
+  Active         Checked
+  Application    Workspace Reservation Management
+
+  Script:
+
+    function onChange(control, oldValue, newValue, isLoading) {
+        if (isLoading || newValue === '') {
+            g_form.clearValue('location');
+            return;
+        }
+        g_form.getReference('select_workspace', function(workspace) {
+            if (workspace && workspace.location) {
+                g_form.setValue('location',
+                    workspace.location,
+                    workspace.dv_location || workspace.location
+                );
+            } else {
+                g_form.clearValue('location');
+            }
+        });
+    }
+
+  If you implement Option B, remove the Default value expression from
+  the Location variable to avoid the two methods conflicting.
+
+Verify: Open catalog item in Service Portal as wrm_user.
+        Select a workspace → PASS: Location field auto-fills.
+        Set End before Start → PASS: Error fires, End field clears.
+        Set valid End, Submit → PASS: RITM created.
+
+
+================================================================================
+4. PHASE 2: REQUEST WORKSPACE RESERVATION FLOW (STORY 16)
+================================================================================
+Update Set: WRM STRY0016 Request Workspace Reservation Flow
+
+What this story does:
+  Automates the full post-submission lifecycle: approval routing,
+  Reservation Tracker record creation, Discord notifications, RITM closure,
+  and rejection email. Build in this order:
+
+  Part A — Workspace Agents group
+  Part B — Discord server, channel, and webhook
+  Part C — System Property for the webhook URL
+  Part D — discordNotification Script Include
+  Part E — Test the Script Include
+  Part F — Two custom Flow Actions
+  Part G — Workspace Reservation Flow
+
+------------------------------------------------------------------------
+PART A: CREATE THE WORKSPACE AGENTS GROUP
+------------------------------------------------------------------------
+1. Type `sys_user_group.list` > Click [New].
+   Name        : Workspace Agents
+   Description : Agents who review and approve reservation requests
+   Active      : Checked
+2. Click [Submit]. Reopen the record.
+3. Scroll to [Roles] related list > Click [Edit].
+   Add: itil, approver_user, x_#####_wrm.wrm_agent
+   Click [Save].
+4. Scroll to [Group Members] > Click [Edit].
+   Add at least one user who will approve requests. Click [Save].
+
+Verify: Roles list shows itil, approver_user, wrm_agent.
+        Group Members list shows at least one user.
+
+------------------------------------------------------------------------
+PART B: SET UP DISCORD
+------------------------------------------------------------------------
+What is Discord?
+  A free messaging platform. ServiceNow posts real-time alerts to a
+  Discord channel whenever a reservation is approved or rejected.
+
+What is a Webhook?
+  A URL Discord gives you. Any program that sends an HTTP POST to that
+  URL with a message gets it displayed in the linked channel.
+
+  IMPORTANT: Treat the webhook URL like a password.
+
+Step B1: Create a Discord account at discord.com if you do not have one.
+
+Step B2: Create a server
+  Click [+] in the left sidebar > [Create My Own] > [For me and my friends]
+  Name: Workspace Reservation Management > Click [Create].
+
+Step B3: Create the alerts channel
+  Click [+] next to TEXT CHANNELS.
+  Name: servicenow-workspace-alerts > Click [Create Channel].
+
+Step B4: Create the webhook
+  Right-click servicenow-workspace-alerts > [Edit Channel].
+  Click [Integrations] > [Create Webhook].
+  Name: Workspace Alerts.
+  Confirm channel is servicenow-workspace-alerts.
+  Click [Copy Webhook URL]. Paste to a text file temporarily.
+  Click [Save].
+
+Verify: Webhook URL starts with: https://discord.com/api/webhooks/
+
+------------------------------------------------------------------------
+PART C: STORE THE WEBHOOK URL IN A SYSTEM PROPERTY
+------------------------------------------------------------------------
+What is a System Property?
+  A named settings record in ServiceNow. Scripts read the value by name
+  at runtime. If the URL ever changes, update one record — every script
+  automatically uses the new value. Never hard-code a URL in code.
+
+1. Type `sys_properties.list` > Click [New].
+   Suffix      : discord.webhook_url
+   Application : Workspace Reservation Management
+   Description : Discord webhook URL for workspace alerts
+   Type        : string
+   Value       : (paste your webhook URL from Part B)
+2. Click [Submit].
+3. Reopen the record. The Name field shows your full property name:
+     x_abcde12_wrm.discord.webhook_url
+   Copy this full Name string — you need it in the Script Include.
+
+Verify: Name = your_prefix.discord.webhook_url
+        Value = your Discord webhook URL.
+
+------------------------------------------------------------------------
+PART D: BUILD THE discordNotification SCRIPT INCLUDE
+------------------------------------------------------------------------
+What is a Script Include?
+  A reusable block of server-side JavaScript stored as a named record.
+  Any script, flow, or business rule can call it by name. Think of it
+  as a vending machine — build it once, and anything can deliver a
+  Discord message without rewriting the same logic.
+
+Navigate: [All] > [System Definition] > [Script Includes] > [New]
+OR: `sys_script_include.list` — Click [New].
+
+  Name             : discordNotification
+  Application      : Workspace Reservation Management
+  Accessible from  : All application scopes
+  Active           : Checked
+  Description      : Sends messages to Discord via webhook
+
+Replace the default script with:
+
+var discordNotification = Class.create();
+
+discordNotification.prototype = {
+
+    initialize: function() {
+        // REPLACE x_#####_wrm.discord.webhook_url with YOUR full property name.
+        this.webhookURL = gs.getProperty('x_#####_wrm.discord.webhook_url');
+    },
+
+    // message : text to post in the Discord channel
+    // emoji   : optional emoji character prepended to the message
+    sendMessage: function(message, emoji) {
+
+        if (!this.webhookURL) {
+            gs.warn('discordNotification: Webhook URL not configured. ' +
+                    'Check the discord.webhook_url system property.');
+            return false;
+        }
+
+        try {
+            // sn_ws.RESTMessageV2 is ServiceNow's built-in HTTP client.
+            var request = new sn_ws.RESTMessageV2();
+            request.setEndpoint(this.webhookURL);
+            request.setHttpMethod('POST');
+            request.setRequestHeader('Content-Type', 'application/json');
+            var payload = { content: (emoji ? emoji + ' ' : '') + message };
+            request.setRequestBody(JSON.stringify(payload));
+            var response   = request.execute();
+            var httpStatus = response.getStatusCode();
+            if (httpStatus == 200 || httpStatus == 204) {
+                gs.info('discordNotification: Message sent successfully.');
+                return true;
+            } else {
+                gs.error('discordNotification: Failed. HTTP status: ' + httpStatus);
+                return false;
+            }
+        } catch (ex) {
+            // Log and return false — do NOT crash the calling flow.
+            gs.error('discordNotification: Exception: ' + ex.message);
+            return false;
+        }
+    },
+
+    type: 'discordNotification'
+};
+
+Click [Submit].
+
+[Senior Note]: The try/catch block is critical. Without it, a failed
+REST call throws an unhandled exception that halts the entire flow.
+With try/catch, the error is logged and the flow continues normally.
+Always wrap outbound HTTP calls in try/catch.
+
+------------------------------------------------------------------------
+PART E: TEST BEFORE BUILDING THE FLOW
+------------------------------------------------------------------------
+STOP AND TEST NOW. Do not skip this step.
+
+Navigate: [All] > [System Definition] > [Scripts - Background]
+OR: `sys.scripts.do`
+
+Paste and run:
+  new discordNotification().sendMessage('Test message from ServiceNow', '✅');
+
+Click [Run script]. Check your Discord channel.
+  PASS: Message "✅ Test message from ServiceNow" appears in Discord.
+  FAIL: Navigate [All] > [System Log] > [Application Log].
+        Filter Source = discordNotification. Read the error message.
+        Common issues: wrong property name in gs.getProperty(), wrong
+        webhook URL, Script Include not Active.
+
+Do NOT proceed to Part F until the test message appears.
+
+------------------------------------------------------------------------
+PART F: BUILD THE TWO CUSTOM FLOW ACTIONS
+------------------------------------------------------------------------
+What is a Flow Action?
+  A reusable named step in Flow Designer with defined inputs, a script,
+  and optional outputs. Build once — use in any flow. Build AND PUBLISH
+  both actions before building the flow. An unpublished action cannot
+  be used.
+
+  OPTION A: Custom Flow Actions (RECOMMENDED — reusable architecture)
+  -------------------------------------------------------------------
+  ---- Action 1: Send Discord Approval Notification ----
+
+  Navigate: [All] > [Process Automation] > [Flow Designer]
+  Click [New] > [Action].
+
+    Action name : Send Discord Approval Notification
+    Application : Workspace Reservation Management
+
+  INPUTS — Click [Inputs]. Add four:
+
+    Label           Internal Name    Type
+    --------------- ---------------- --------------------------------
+    Reserved For    reserved_for     Reference > User [sys_user]
+    Workspace       workspace        Reference > Workspace Options
+    Start Date Time start_date_time  Date/Time
+    Tracker Record  tracker_record   Reference > Reservation Tracker
+
+  SCRIPT STEP — Click [+] > [Script]. Script:
+
+    (function execute(inputs, outputs) {
+        try {
+            var reservedFor = inputs.reserved_for
+                ? inputs.reserved_for.getValue('name') : 'Unknown';
+            var workspace = inputs.workspace
+                ? inputs.workspace.getValue('workspace_name') : 'Unknown';
+
+            // Convert raw date to human-readable display format.
+            var startDate = 'Unknown';
+            if (inputs.start_date_time) {
+                var gdt = new GlideDateTime();
+                gdt.setValue(inputs.start_date_time + '');
+                startDate = gdt.getDisplayValue();
+            }
+
+            // Build a clickable link to the Reservation Tracker record.
+            // NEVER hardcode the instance URL — use glide.servlet.uri.
+            var trackerLink = '';
+            if (inputs.tracker_record) {
+                var num    = inputs.tracker_record.getValue('number');
+                var sysId  = inputs.tracker_record.getUniqueValue();
+                var baseUrl = gs.getProperty('glide.servlet.uri');
+                var url = baseUrl +
+                    'nav_to.do?uri=x_#####_wrm_reservation_tracker.do' +
+                    '?sys_id=' + sysId;
+                trackerLink = '\n📄 Reservation ' + num + ': ' + url +
+                    '\n👋 Who can claim this one?';
+            }
+
+            var message = 'Workspace reservation approved for ' +
+                reservedFor + ' - ' + workspace + ' on ' + startDate +
+                trackerLink;
+
+            new discordNotification().sendMessage(message, '✅');
+        } catch (ex) {
+            gs.error('Discord approval error: ' + ex.message);
+        }
+    })(inputs, outputs);
+
+  Click [Save] then [Publish].
+
+  ---- Action 2: Send Discord Rejection Notification ----
+
+  Click [New] > [Action].
+    Action name : Send Discord Rejection Notification
+    Application : Workspace Reservation Management
+
+  INPUTS (two):
+    Label         Internal Name   Type
+    ------------- --------------- --------------------------------
+    Reserved For  reserved_for    Reference > User [sys_user]
+    Workspace     workspace       Reference > Workspace Options
+
+  SCRIPT STEP:
+
+    (function execute(inputs, outputs) {
+        try {
+            var reservedFor = inputs.reserved_for
+                ? inputs.reserved_for.getValue('name') : 'Unknown';
+            var workspace = inputs.workspace
+                ? inputs.workspace.getValue('workspace_name') : 'Unknown';
+            var message = 'Workspace reservation rejected for ' +
+                reservedFor + ' - ' + workspace;
+            new discordNotification().sendMessage(message, '❌');
+        } catch (ex) {
+            gs.error('Discord rejection error: ' + ex.message);
+        }
+    })(inputs, outputs);
+
+  Click [Save] then [Publish].
+
+  Verify: Both actions appear in Flow Designer > Actions with Status = Published.
+
+  -----------------------------------------------------------------------
+  OPTION B: Inline Run Script Steps in the Flow
+  (Use only if you do not plan to reuse these notifications elsewhere)
+  -----------------------------------------------------------------------
+  Add Run Script steps directly inside the flow at each notification
+  point. Copy the same script content, replacing inputs.field_name with
+  fd_data. data-bus references.
+  Limitation: each future Discord notification needs its own copy.
+  With Option A, you update one action record — all flows benefit.
+
+------------------------------------------------------------------------
+PART G: BUILD THE WORKSPACE RESERVATION FLOW
+------------------------------------------------------------------------
+Navigate: [All] > [Process Automation] > [Flow Designer]
+Click [New] > [Flow].
+
+  Name        : Workspace Reservation
+  Application : Workspace Reservation Management
+  Run as      : System User
+
+TRIGGER:
+  Click [Add a Trigger] > Service Catalog > Service Catalog Item Submitted.
+  Catalog Item: Workspace Reservation Request.
+
+STEP G2: GET CATALOG VARIABLES
+  OPTION A (Recommended): Click [+] > [Action] > [Get Catalog Variables].
+    Request Item: Trigger > Requested Item Record.
+    Add variables: reserved_for, select_workspace, start_date_time,
+    end_date_time, location, purpose_of_visit, additional_comments.
+  OPTION B: Run Script using GlideRecord on sc_req_item (more complex).
+  Use Option A — no code required.
+
+STEP G3: ASK FOR APPROVAL
+  Click [+] > [Action] > [Ask For Approval].
+    Record         : Trigger > Requested Item Record
+    Approval Field : Approval
+    Anyone Approves: Selected
+    Users/Groups   : Workspace Agents
+
+STEP G4: IF / ELSE BRANCH
+  Click [+] > [Flow Logic] > [If].
+  Condition: Approval Status is Approved.
+
+===== APPROVED BRANCH — STEPS INSIDE THE "IF" BLOCK =====
+
+STEP G5 (Approved): CREATE RESERVATION TRACKER — DO THIS FIRST
+  The Discord approval action needs the tracker's sys_id for the link.
+  Creating the record first ensures the data exists.
+
+  OPTION A (Recommended): Click [+] > [Action] > [Create Record].
+    Table: Reservation Tracker [x_#####_wrm_reservation_tracker]
+
+    Tracker Field          Source (data pill)
+    ---------------------- -----------------------------------------------
+    workspace              Get Catalog Variables > select_workspace
+    reserved_for           Get Catalog Variables > reserved_for
+    actual_start           Get Catalog Variables > start_date_time
+    actual_end             Get Catalog Variables > end_date_time
+    location               Get Catalog Variables > location
+    purpose_of_visit       Get Catalog Variables > purpose_of_visit
+    additional_notes       Get Catalog Variables > additional_comments
+    request_number         Trigger > Requested Item Record
+    reservation_status     pending_check_in  (literal)
+    state                  1  (integer — Open)
+    assignment_group       Workspace Agents  (group lookup)
+
+  OPTION B: Run Script with GlideRecord — use only if you need
+  conditional field logic the Create Record action cannot express.
+
+STEP G6 (Approved): SEND DISCORD APPROVAL NOTIFICATION
+  OPTION A: Click [+] > [Action] > Search "Send Discord Approval Notification".
+    reserved_for    → Get Catalog Variables > reserved_for
+    workspace       → Get Catalog Variables > select_workspace
+    start_date_time → Get Catalog Variables > start_date_time
+    tracker_record  → Create Record output (Step G5)
+  OPTION B: Inline Run Script with fd_data references.
+
+STEP G7 (Approved): CLOSE THE RITM AS CLOSED COMPLETE
+  OPTION A (Recommended): Click [+] > [Action] > [Update Record].
+    Record: Trigger > Requested Item Record.
+    State: Closed Complete.
+  OPTION B: Run Script — ritm.state = 3; ritm.update();
+
+===== REJECTED BRANCH — STEPS INSIDE THE "ELSE" BLOCK =====
+
+STEP G8 (Rejected): SEND DISCORD REJECTION NOTIFICATION
+  Same Option A / Option B choices as Step G6, using the Rejection action.
+
+STEP G9 (Rejected): CLOSE THE RITM AS CLOSED INCOMPLETE
+  OPTION A: Update Record — State: Closed Incomplete.
+  OPTION B: Run Script — ritm.state = 4;
+
+STEP G10 (Rejected): SEND REJECTION EMAIL
+  OPTION A: Click [+] > [Action] > [Send Email].
+    To: Get Catalog Variables > reserved_for.
+    Subject: Your Workspace Reservation Request Has Been Declined.
+    Body: Explain the outcome and provide the Workspace Agents contact.
+  OPTION B: Notification record (sysevent_email_action.list) triggered
+    when RITM State changes to Closed Incomplete AND Cat item is
+    Workspace Reservation Request. Easier to modify without touching flow.
+
+ACTIVATE THE FLOW
+  Click [Save] then [Activate].
+  CRITICAL: An un-activated flow does not run.
+  If you make changes later, click Activate again.
+
+Verify (Approval path):
+  Submit reservation > Approve as Workspace Agents member.
+  PASS: WRT created. All fields populated.
+  PASS: WRT status = Pending check-in. State = Open.
+  PASS: WRT Assignment group = Workspace Agents.
+  PASS: RITM State = Closed Complete.
+  PASS: Discord shows ✅ message with clickable WRT link.
+  PASS: Link opens the correct WRT record.
+
+Verify (Rejection path):
+  Submit reservation > Reject.
+  PASS: No WRT record created.
+  PASS: RITM State = Closed Incomplete.
+  PASS: Discord shows ❌ message.
+  PASS: Reserved-for user receives rejection email.
+
+
+================================================================================
+5. PHASE 3: ROLE-BASED ACCESS CONTROLS (STORY 17)
+================================================================================
+Update Set: WRM STRY0017 ACL Updates
+
+What this story does:
+  Reviews and corrects security rules on all three WRM tables so each
+  role has exactly the access it needs — no more, no less.
+
+------------------------------------------------------------------------
+BACKGROUND: WHAT IS AN ACL?
+------------------------------------------------------------------------
+An ACL (Access Control List) is a security rule controlling whether a
+user can create, read, write, or delete a record. Three checks in order:
+  1. Role check      — Does the user have a required role?
+  2. Condition check — Does the record match the filter?
+  3. Script check    — If a script is on the ACL, does it return true?
+All three must pass for access to be granted.
+
+------------------------------------------------------------------------
+REQUIRED ACL MATRIX
+------------------------------------------------------------------------
+WORKSPACE OPTIONS [x_#####_wrm_workspace_options]
+  Read    No role required (anyone — needed for catalog reference picker)
+  Create  wrm_admin or table role
+  Write   wrm_admin or table role
+  Delete  admin only
+
+RESERVATION TRACKER [x_#####_wrm_reservation_tracker]
+  Read    wrm_agent, wrm_user
+  Create  wrm_agent, wrm_user
+  Write   wrm_agent, wrm_user
+  Delete  admin only
+
+WORKSPACE MAINTENANCE [x_#####_wrm_workspace_maintenance]
+  Read    wrm_agent or maintenance table role
+  Create  wrm_agent or maintenance table role
+  Write   maintenance table role
+  Delete  admin only
+
+------------------------------------------------------------------------
+STEP 5.1: UPDATE ACL RECORDS
+------------------------------------------------------------------------
+OPTION A: Direct ACL List Editing (Recommended)
+
+  1. Type `sys_security_acl.list` into the Filter Navigator.
+  2. Filter: Name contains x_#####_wrm.
+  3. For each ACL record:
+     a. Click the Name to open it.
+     b. Scroll to the [Roles] related list > Click [Edit].
+     c. Add or remove roles. Click [Save].
+     d. Click [Update] on the ACL record.
+
+  To CREATE a missing ACL:
+  1. In sys_security_acl.list, click [New].
+     Type       : record
+     Name       : x_#####_wrm_workspace_options
+     Operation  : read / create / write / delete
+     Application: Workspace Reservation Management
+     Active     : Checked
+  2. Click [Submit]. Add roles via the [Roles] related list.
+
+OPTION B: Access Control Wizard (if available)
+  Navigate: [All] > [System Security] > [Access Control Wizard]
+  Guides through defining operations and assigning roles visually.
+
+------------------------------------------------------------------------
+STEP 5.2: HOW TO TEST ACLs
+------------------------------------------------------------------------
+OPTION A: Impersonation Testing (Recommended)
+  Navigate [All] > [User Administration] > [Users].
+  Open a user with ONLY the role you want to test.
+  Click [Impersonate User]. Attempt the operation. Confirm result.
+  Click the user avatar > [End Impersonation] when done.
+
+  NOTE: The admin role bypasses ALL ACLs. Always test with non-admin users.
+
+OPTION B: Debug Security Tool
+  Type `sys_security_debug.do` into the Filter Navigator.
+  Shows every ACL evaluated and whether each check passed or failed.
+
+Verify: wrm_user — can read Workspace Options; cannot create records.
+        wrm_admin — can create and write Workspace Options.
+        wrm_agent — can create/write Reservation Tracker and Maintenance.
+        No-role user — access denied to Reservation Tracker.
+
+
+================================================================================
+6. PHASE 4: RESERVATION CONFIRMATION NOTIFICATION (STORY 18)
+================================================================================
+Update Set: WRM STRY0018 Reservation Confirmation Notification
+
+What this story does:
+  Sends a confirmation email to the requester when their RITM closes
+  as Closed Complete, with full reservation details.
+
+------------------------------------------------------------------------
+OPTION A: Notification Record (RECOMMENDED)
+------------------------------------------------------------------------
+A Notification record is declarative: define WHEN, WHO, and WHAT in one
+record. The platform evaluates it every time a record is saved. No flow
+step needed. Preferred by ServiceNow architects for event-driven emails.
+
+Navigate: `sysevent_email_action.list` — Click [New].
+
+HEADER
+  Name        : Workspace Reservation Confirmation
+  Table       : Requested Item [sc_req_item]
+  Application : Workspace Reservation Management
+  Active      : Checked
+
+WHEN TO SEND TAB
+  Send    : When a Record is Updated
+  Conditions:
+    Row 1: State  changes to  Closed Complete
+    Row 2: AND  Cat item  is  Workspace Reservation Request
+
+  [Senior Note — "changes to" vs "is"]:
+  "Changes to" fires only at the transition. "Is" would fire every time
+  any field is saved on a closed RITM — causing duplicate emails.
+  Always use "changes to" for transition-based notifications.
+
+WHO WILL RECEIVE TAB
+  Users/Groups in fields: Opened by
+
+WHAT IT WILL CONTAIN TAB
+  Subject: Important details for your workspace reservation ${number}
+
+  Message HTML body:
+
+  <p>Hi ${opened_by},</p>
+  <p>Your workspace reservation has been <strong>confirmed</strong>.
+  Please review your booking details below:</p>
+  <table style="border-collapse:collapse;width:100%;max-width:600px;">
+    <tr>
+      <td style="padding:8px;border:1px solid #ccc;background:#f5f5f5;">
+          <strong>Request Number</strong></td>
+      <td style="padding:8px;border:1px solid #ccc;">${number}</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid #ccc;background:#f5f5f5;">
+          <strong>Workspace</strong></td>
+      <td style="padding:8px;border:1px solid #ccc;">
+          ${variables.select_workspace.workspace_name}</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid #ccc;background:#f5f5f5;">
+          <strong>Location</strong></td>
+      <td style="padding:8px;border:1px solid #ccc;">
+          ${variables.location.name}</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid #ccc;background:#f5f5f5;">
+          <strong>Start date/time</strong></td>
+      <td style="padding:8px;border:1px solid #ccc;">
+          ${variables.start_date_time}</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid #ccc;background:#f5f5f5;">
+          <strong>End date/time</strong></td>
+      <td style="padding:8px;border:1px solid #ccc;">
+          ${variables.end_date_time}</td>
+    </tr>
+  </table>
+  <p><strong>To cancel your reservation:</strong><br/>
+  Please contact the Workspace Agents team as soon as possible. Do not
+  simply not show up — a no-show will be recorded and may affect future
+  booking privileges.</p>
+  <p>Thank you,<br/>Workspace Reservation Management Team</p>
+
+Click [Submit].
+
+[Senior Note on dot-walking]:
+  ${variables.select_workspace.workspace_name}
+    walks from RITM → catalog variable → workspace record → field.
+  If a substitution shows blank, verify the internal variable name on
+  the catalog item (not the question text label).
+
+------------------------------------------------------------------------
+OPTION B: Flow Designer Send Email Action
+------------------------------------------------------------------------
+Add a Send Email step inside the Workspace Reservation flow on the
+approved branch. Works but ties email changes to a flow republish.
+Prefer Option A unless email content depends on runtime flow data.
+
+Verify: Complete approval. RITM reaches Closed Complete.
+        PASS: Submitter receives confirmation email.
+        PASS: Subject contains RITM number.
+        PASS: All reservation details and cancellation note present.
+        PASS: Update another field on the RITM — no second email fires.
+
+
+================================================================================
+7. PHASE 5: FULFILLMENT SLA (STORY 19)
+================================================================================
+Update Set: WRM STRY0019 Fulfillment SLA
+
+What this story does:
+  Adds a 4-business-hour timer to every Workspace Reservation Request RITM.
+  The timer starts when the RITM opens and stops when it reaches Closed
+  Complete. If 4 business hours pass without closure, the SLA breaches.
+  A cloned workflow sends warning emails to the Workspace Agents group at
+  50%, 75%, and 100% of the target so agents have advance notice.
+
+------------------------------------------------------------------------
+BACKGROUND: WHAT IS AN SLA IN SERVICENOW?
+------------------------------------------------------------------------
+An SLA (Service Level Agreement) Definition is a configuration record
+that creates a timer — called a Task SLA — on any record matching its
+conditions. Think of it as a countdown clock.
+
+  Task SLA  — the individual timer record attached to each matching RITM
+  Target    — total allowed time (4 hours on a Business Hours schedule)
+  Breach    — timer hits 100% without the stop condition being met
+  Workflow  — background process that fires warning emails at 50/75/100%
+
+There is no scripting alternative for SLA Definitions — this is a pure
+configuration story.
+
+------------------------------------------------------------------------
+STEP 7.1: ACTIVATE THE UPDATE SET
+------------------------------------------------------------------------
+  1. Type `sys_update_set.list` > Click [New].
+  2. Name: WRM STRY0019 Fulfillment SLA
+  3. Application: Workspace Reservation Management
+  4. Click [Submit and Make Current].
+
+------------------------------------------------------------------------
+STEP 7.2: CREATE THE SLA DEFINITION
+------------------------------------------------------------------------
+Navigate: `agreement_service_level.list` — Click [New].
+
+  Field          Value
+  -------------- -------------------------------------------------------
+  Name           Workspace Reservation Fulfillment SLA
+  Table          Requested Item [sc_req_item]
+  Application    Workspace Reservation Management
+  Type           SLA
+  Target         4  (enter the number 4)
+  Duration unit  Hours  (select from the unit dropdown)
+  Schedule       8-5 weekdays excluding holidays
+  Timezone       Leave as default (instance timezone)
+  Active         Checked
+  Workflow       Leave blank — you will set this in Step 7.7
+
+Do NOT click Submit yet. Continue to Step 7.3 to set conditions.
+
+------------------------------------------------------------------------
+STEP 7.3: SET START AND STOP CONDITIONS
+------------------------------------------------------------------------
+These conditions are on the SAME form. Scroll down.
+
+START CONDITIONS:
+  Click [Add Filter Condition] for each row.
+  Row 1: State   is   Open
+  Row 2: AND  Cat item  is  Workspace Reservation Request
+
+  [Senior Note]: Without the "Cat item" condition, this SLA attaches to
+  EVERY RITM on the entire instance. Always scope SLA definitions.
+
+STOP CONDITIONS:
+  Row 1: State  is  Closed Complete
+
+PAUSE CONDITIONS: Leave empty.
+
+Click [Submit].
+
+------------------------------------------------------------------------
+STEP 7.4: FIND THE IMPORT SET TABLE NAME (how to get it)
+------------------------------------------------------------------------
+NOTE: This step is for finding the correct table name when setting up
+the SLA Definition's workflow.  Skip to Step 7.5.
+
+------------------------------------------------------------------------
+STEP 7.5: CLONE THE DEFAULT SLA WORKFLOW
+------------------------------------------------------------------------
+The Default SLA Workflow sends warning emails at 50%, 75%, and 100%.
+Cloning creates a copy you can modify without affecting other SLAs.
+
+PART A — Open the Default SLA Workflow:
+  1. Type `wf_workflow.list` into the Filter Navigator.
+  2. Search for: Default SLA Workflow
+  3. Open the record named "Default SLA Workflow."
+  4. Click the [Workflow Editor] related link.
+     The Workflow Editor canvas opens in a new browser tab.
+     You will see activity boxes connected by arrows.
+
+PART B — Clone the Workflow:
+  OPTION A (From the Workflow Editor):
+    In the toolbar, look for the [Properties] icon (gear). Click it.
+    Look for a [Copy] or [Clone Workflow] button. Click it.
+    Name the clone: WRM Reservation SLA Workflow. Click [OK].
+
+  OPTION B (From the record list):
+    Close the Workflow Editor tab. Go back to `wf_workflow.list`.
+    Right-click the row for "Default SLA Workflow."
+    Click [Copy] or [Clone Record].
+    Name: WRM Reservation SLA Workflow. Click [Save].
+
+  Verify: "WRM Reservation SLA Workflow" appears in wf_workflow.list.
+          The original Default SLA Workflow is unchanged.
+
+------------------------------------------------------------------------
+STEP 7.6: ADJUST TIMER THRESHOLDS
+------------------------------------------------------------------------
+  1. Open "WRM Reservation SLA Workflow" from `wf_workflow.list`.
+  2. Click [Workflow Editor] to open the canvas.
+  3. Find activity boxes labeled 50% Elapsed, 75% Elapsed, 100% Elapsed.
+  4. For each activity:
+     a. Double-click the activity box to open its properties panel.
+     b. Confirm Percentage values: 50, 75, 100.
+        These relative percentages work for any target time:
+          50% = 2 hours on a 4-hour SLA
+          75% = 3 hours
+          100% = 4 hours (breach point)
+     c. No changes needed if already 50/75/100.
+
+------------------------------------------------------------------------
+STEP 7.7: UPDATE NOTIFICATION RECIPIENTS
+------------------------------------------------------------------------
+For EACH of the three timer levels (50%, 75%, 100%):
+  1. On the canvas, find the Send Email activity connected AFTER
+     the corresponding timer activity.
+     ([50% Timer] → [Send Email at 50%])
+  2. Double-click the Send Email activity.
+  3. In the properties panel, look for Recipients / Users.
+  4. Click [Add] > switch type to "Group" > search: Workspace Agents.
+  5. Select it and click [OK].
+  6. Keep existing recipients. Click [Save].
+
+Repeat for all three Send Email activities.
+
+After all three are updated:
+  In the Workflow Editor toolbar, click [Publish].
+  Verify: Status shows "Published."
+
+------------------------------------------------------------------------
+STEP 7.8: ATTACH THE WORKFLOW TO THE SLA DEFINITION
+------------------------------------------------------------------------
+  1. Type `agreement_service_level.list`.
+  2. Open: Workspace Reservation Fulfillment SLA
+  3. Click the lookup icon next to the Workflow field.
+  4. Search and select: WRM Reservation SLA Workflow
+  5. Click [Update].
+
+  Verify: Workflow field = "WRM Reservation SLA Workflow"
+
+------------------------------------------------------------------------
+STEP 7.9: ADD THE SLA RELATED LIST TO THE RITM FORM
+------------------------------------------------------------------------
+OPTION A: Configure via Form Layout (Recommended)
+  1. Type `sc_req_item.list` > open any RITM record.
+  2. Right-click the gray form header bar > [Configure] > [Related Lists].
+  3. Move "Task SLA" from Available to Selected. Click [Save].
+
+OPTION B: Navigate directly via `task_sla.list`.
+  Not recommended — agents will not see the timer automatically.
+
+------------------------------------------------------------------------
+VERIFY: STORY 19 CHECKLIST
+------------------------------------------------------------------------
+TEST 1 — SLA attaches to WRM RITMs:
+  Submit a Workspace Reservation Request.
+  Open the RITM > scroll to Task SLA related list.
+  PASS: "Workspace Reservation Fulfillment SLA" appears.
+  PASS: Stage = In Progress. Target = 4:00:00.
+
+TEST 2 — SLA stops on Closed Complete:
+  Approve the RITM. Open it again.
+  PASS: Task SLA Stage = Complete.
+
+TEST 3 — Non-WRM RITM does NOT get this SLA:
+  Submit any other catalog item. Open that RITM.
+  PASS: WRM SLA does NOT appear.
+
+TEST 4 — Workflow is attached:
+  PASS: agreement_service_level record shows "WRM Reservation SLA Workflow."
+  PASS: wf_workflow.list shows Status = Published.
+
+Close the update set: WRM STRY0019 > State = Complete.
+
+  [Troubleshooting — Workflow Editor]:
+  If the canvas does not load, allow pop-ups from your PDI URL in the browser.
+  If it is still unavailable, leave the Workflow field blank — the SLA timer
+  still runs and records data; you simply will not receive warning emails.
+
+
+================================================================================
+8. PHASE 6: CHECK-OUT NOTIFICATION (STORY 20)
+================================================================================
+Update Set: WRM STRY0020 Check-Out Notification
+
+What this story does:
+  Emails the Assigned agent when a Reservation Tracker record's
+  Reservation status changes to Checked-out. Instructs the agent to
+  inspect the workspace and click Needs Maintenance if issues are found.
+
+------------------------------------------------------------------------
+OPTION A: Notification Record (RECOMMENDED)
+------------------------------------------------------------------------
+Navigate: `sysevent_email_action.list` — Click [New].
+
+HEADER
+  Name        : Workspace Check Required - Checked Out
+  Table       : Reservation Tracker [x_#####_wrm_reservation_tracker]
+  Application : Workspace Reservation Management
+  Active      : Checked
+
+WHEN TO SEND TAB
+  Send       : When a Record is Updated
+  Conditions : Reservation status  changes to  Checked-out
+
+WHO WILL RECEIVE TAB
+  Users/Groups in fields: Assigned to
+
+WHAT IT WILL CONTAIN TAB
+  Subject: Workspace check required for ${number}
+
+  Body:
+
+  <p>Hi ${assigned_to.first_name},</p>
+  <p>The following reservation has been <strong>checked out</strong>.
+  Please inspect the workspace as soon as possible.</p>
+  <table style="border-collapse:collapse;width:100%;max-width:600px;">
+    <tr>
+      <td style="padding:8px;border:1px solid #ccc;background:#f5f5f5;">
+          <strong>Reservation</strong></td>
+      <td style="padding:8px;border:1px solid #ccc;">${number}</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid #ccc;background:#f5f5f5;">
+          <strong>Workspace</strong></td>
+      <td style="padding:8px;border:1px solid #ccc;">
+          ${workspace.workspace_name}</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid #ccc;background:#f5f5f5;">
+          <strong>Location</strong></td>
+      <td style="padding:8px;border:1px solid #ccc;">${location.name}</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid #ccc;background:#f5f5f5;">
+          <strong>Reserved For</strong></td>
+      <td style="padding:8px;border:1px solid #ccc;">${reserved_for.name}</td>
+    </tr>
+  </table>
+  <p><strong>Next steps:</strong><br/>
+  1. Inspect the workspace for any damage or cleanliness issues.<br/>
+  2. If no issues — no action needed.<br/>
+  3. If maintenance is required: open the WRT record, fill in the
+     Maintenance issue field, then click <strong>Needs Maintenance</strong>.
+  </p>
+  <p>Thank you,<br/>Workspace Reservation Management System</p>
+
+Click [Submit].
+
+------------------------------------------------------------------------
+OPTION B: Business Rule or Flow Send Email
+------------------------------------------------------------------------
+Add a Send Email action in a Business Rule on Reservation Tracker.
+Trigger: on update, when reservation_status changes to checked_out.
+Use Option A — it requires no code and is easier to modify.
+
+Verify: Claim a WRT as wrm_agent. Click Check-Out as wrm_user.
+        PASS: Status = Checked-out.
+        PASS: Assigned agent receives inspection email.
+        Update another field — PASS: no second email fires.
+
+
+================================================================================
+9. PHASE 7: WORKSPACE OPTIONS BULK IMPORT ON DEMAND (STORY 21)
+================================================================================
+Update Set: WRM STRY0021 Bulk Import on Demand
+
+Source: ServiceNow Community article by Kalisha_m (July 2025)
+        "Import On-Demand: Automate File Imports using ServiceNow"
+
+What this story builds:
+  A workspace manager uploads an Excel file through the Service Portal.
+  The system automatically loads the rows into a staging table, transforms
+  them into real Workspace Options records, cleans up the file, and emails
+  the manager the result with row counts.
+
+You will build 6 artifacts in this order:
+  A. Catalog Item with mandatory attachment
+  B. Data Source (File Retrieval Method = Attachment)
+  C. Transform Map with field maps, Coalesce, and Location resolution
+  D. importOnDemand Script Include (GLOBAL scope)
+  E. Import Workspace Data Flow Action
+  F. WRM Bulk Import Trigger Flow
+
+Plus one system property update before testing.
+
+------------------------------------------------------------------------
+STEP 9.1: ACTIVATE THE UPDATE SET
+------------------------------------------------------------------------
+  Name: WRM STRY0021 Bulk Import on Demand
+  Application: Workspace Reservation Management
+  Click [Submit and Make Current].
+
+------------------------------------------------------------------------
+STEP 9.2 (ARTIFACT A): CATALOG ITEM
+------------------------------------------------------------------------
+Navigate: `sc_cat_item.list` — Click [New].
+
+  Field             Value
+  ----------------- -------------------------------------------------------
+  Name              Workspace Options Bulk Update
+  Short description Upload an Excel file to bulk-add or update Workspace Options
+  Catalogs          Service Catalog
+  Category          Workspace Reservations
+  Application       Workspace Reservation Management
+  Active            Checked
+
+Click [Submit]. Reopen the record.
+
+ENABLE MANDATORY ATTACHMENT (no variables needed):
+
+  OPTION A: Portal Settings tab (Recommended)
+    1. Click the [Portal Settings] tab on the catalog item.
+    2. Find "Mandatory Attachment" or "Attachment Mandatory."
+    3. Set to Yes (or tick checkbox).
+    4. Click [Update].
+    The Service Portal will require a file before Submit becomes active.
+    The uploaded file stores as sys_attachment on the RITM.
+
+  OPTION B: Add an Attachment variable
+    Open the catalog item > [Variables] tab > [New].
+      Type          : Attachment
+      Name          : workspace_data_file
+      Question text : Excel file to import
+      Mandatory     : Checked
+      Order         : 200
+    Both options store the file the same way — sys_attachment on the RITM.
+    Option A is cleaner for PDI; Option B adds an explicit labeled field.
+
+Do NOT connect a flow yet. Connect it in Step 9.11.
+
+------------------------------------------------------------------------
+STEP 9.3 (ARTIFACT B): DATA SOURCE
+------------------------------------------------------------------------
+BACKGROUND: A Data Source tells ServiceNow the file format and which
+staging table to load it into. Three fields are critical: Type, File type,
+and File Retrieval Method. Without File Retrieval Method = Attachment, the
+import cannot find the uploaded file.
+
+HOW TO FIND THE IMPORT SET TABLE NAME (do this first):
+  1. Navigate: [All] > [System Import Sets] > [Load Data]
+  2. Import set table: Create new. Label: WRM Workspace Options Bulk Import
+  3. Choose File: select WRM_Workspace_Bulk_Import_Sample.xlsx
+  4. Click [Submit].
+  5. When redirected, click [Loaded Data] in the related list.
+  6. Right-click any column header > [Configure] > [Table].
+  7. Copy the table name shown (e.g., u_wrm_workspace_options_bulk_import).
+
+Navigate: `sys_data_source.list` — Click [New].
+
+  Field                   Value
+  ----------------------- --------------------------------------------------
+  Name                    WRM Workspace Options Bulk Import
+  Import set table label  WRM Workspace Options Bulk Import
+  Import set table name   (paste the table name copied above)
+  Type                    File
+  File type               Excel
+  File Retrieval Method   Attachment   ← CRITICAL — do not skip
+  Application             Workspace Reservation Management
+
+Click [Submit].
+Copy the sys_id from the URL bar — you need it in Step 9.8.
+
+------------------------------------------------------------------------
+STEP 9.4 (ARTIFACT C): TRANSFORM MAP
+------------------------------------------------------------------------
+Navigate: `sys_transform_map.list` — Click [New].
+
+  Field              Value
+  ------------------ -------------------------------------------------------
+  Name               WRM Workspace Options Bulk Transform
+  Source table       WRM Workspace Options Bulk Import
+  Target table       Workspace Options [x_#####_wrm_workspace_options]
+  Run business rules Checked
+  Copy empty fields  Unchecked
+  Application        Workspace Reservation Management
+
+Click [Submit]. Reopen.
+Copy the sys_id from the URL bar — you need it in Step 9.8.
+
+------------------------------------------------------------------------
+STEP 9.5: AUTO MAP MATCHING FIELDS
+------------------------------------------------------------------------
+In the [Field Maps] related list, click [Auto Map Matching Fields].
+Confirm these six maps are created:
+
+  Staging Column          →  Target Field
+  ----------------------  -------------------------
+  workspace_name          →  workspace_name
+  workspace_type          →  workspace_type
+  max_occupancy           →  max_occupancy
+  status                  →  status
+  workspace_description   →  workspace_description
+  location                →  location  (see Step 9.6)
+
+Add any missing maps manually via [New] in the related list.
+
+------------------------------------------------------------------------
+STEP 9.6: CONFIGURE THE LOCATION FIELD MAP
+------------------------------------------------------------------------
+The location field stores a reference sys_id, not plain text.
+
+OPTION A: Coerce Field (Recommended — Configuration Only)
+  Open the location field map record.
+  Set "Coerce field" to: Name
+  This resolves the Excel text to the cmn_location record whose Name
+  matches. Click [Update].
+  IMPORTANT: Text in Excel MUST exactly match cmn_location.name.
+  Run `cmn_location.list` to verify names before importing.
+
+OPTION B: Transform Script (When Coerce Field Does Not Resolve)
+  Open the location field map > tick "Use source script":
+
+    answer = null;
+    if (source.location != '') {
+        var locGr = new GlideRecord('cmn_location');
+        locGr.addQuery('name', source.location.toString());
+        locGr.query();
+        if (locGr.next()) {
+            answer = locGr.sys_id;
+        }
+    }
+
+------------------------------------------------------------------------
+STEP 9.7: SET COALESCE ON WORKSPACE_NAME
+------------------------------------------------------------------------
+  1. Open the workspace_name field map record.
+  2. Tick the "Coalesce" checkbox. Click [Update].
+
+  Coalesce = if workspace_name already exists, UPDATE it. If not, INSERT.
+  Prevents duplicates when the same file is re-imported.
+
+  EXPECTED PROMPT — "Coalesce field not indexed":
+  ServiceNow will show a warning: "None of fields configured to coalesce
+  are indexed on the target table. Unindexed coalesce fields may impact
+  performance during transformation. If you want to create an index,
+  click OK. Otherwise, click Cancel."
+
+  Click [OK]. This creates a database index on workspace_name, which
+  improves performance and removes the warning permanently. It does not
+  affect any existing data.
+
+------------------------------------------------------------------------
+STEP 9.8 (ARTIFACT D): SCRIPT INCLUDE — importOnDemand (GLOBAL SCOPE)
+------------------------------------------------------------------------
+WHY GLOBAL SCOPE?
+  GlideImportSetLoader and GlideImportSetTransformer are global APIs.
+  Your WRM app is scoped. Scoped apps can call global Script Includes
+  but the Script Include itself must live in global scope to access them.
+  This is the ONLY artifact in Story 21 that goes in global scope.
+
+Navigate: `sys_script_include.list` — Click [New].
+
+  Name         : importOnDemand
+  API Name     : importOnDemand
+  Application  : Global   ← CRITICAL: must be Global, not WRM
+  Accessible   : All application scopes
+  Active       : Checked
+
+Script:
+
+var importOnDemand = Class.create();
+
+importOnDemand.prototype = {
+
+    importAndTransform: function(dataSourceSysId, transformMapSysId) {
+
+        // Step 1: Get the Data Source record
+        var grDataSource = new GlideRecord('sys_data_source');
+        if (!grDataSource.get(dataSourceSysId)) {
+            gs.error('importOnDemand: Data Source not found: ' + dataSourceSysId);
+            return null;
+        }
+
+        // Step 2: Create the Import Set and load the Excel attachment.
+        // GlideImportSetLoader reads the file from the attachment
+        // linked to the Data Source (File Retrieval Method = Attachment).
+        var importSetLoader = new GlideImportSetLoader();
+        var grImportSet = importSetLoader.getImportSetGr(grDataSource);
+        importSetLoader.loadImportSetTable(grImportSet, grDataSource);
+
+        // Step 3: Mark the import set as loaded before transforming.
+        grImportSet.setValue('state', 'loaded');
+        grImportSet.update();
+
+        // Step 4: Run the Transform Map to create/update target records.
+        var importSetTransformer = new GlideImportSetTransformer();
+        importSetTransformer.setImportSetID(grImportSet.getUniqueValue());
+        importSetTransformer.setMapID(transformMapSysId);
+        importSetTransformer.setSyncImport(true); // wait for completion
+        importSetTransformer.transformAllMaps(grImportSet);
+
+        return { import_set_sys_id: grImportSet.getUniqueValue() };
+    },
+
+    type: 'importOnDemand'
+};
+
+Click [Submit].
+
+  [API explained]:
+    GlideImportSetLoader    — creates the import set and loads Excel rows
+    getImportSetGr()        — creates a new import set GlideRecord
+    loadImportSetTable()    — reads the file and populates staging table
+    GlideImportSetTransformer — runs the Transform Map against staged rows
+    setSyncImport(true)     — wait until transform is completely done
+
+------------------------------------------------------------------------
+STEP 9.9 (ARTIFACT E): FLOW ACTION — Import Workspace Data
+------------------------------------------------------------------------
+WHY A FLOW ACTION?
+  A Flow Action is reusable across any flow. It accepts typed inputs and
+  returns typed outputs. Using an Action keeps the main flow readable and
+  allows the import_set_sys_id output to feed the results email.
+
+Navigate: Flow Designer > Click [New] > [Action].
+
+  Name        : Import Workspace Data
+  Application : Workspace Reservation Management
+  Accessible from: All application scopes
+
+INPUTS — Click [+ Create Input] for each:
+  Label              Name              Type      Mandatory
+  ----------------   ----------------  --------  ---------
+  Data Source Sys ID dataSourceSysId   String    Checked
+  Transform Map Sys ID transformMapSysId String   Checked
+
+SCRIPT STEP — Click [+ Add a step] > [Script]:
+
+  (function execute(inputs, outputs) {
+
+      // "global." prefix required when calling a global Script Include
+      // from a scoped flow action.
+      var importHelper = new global.importOnDemand();
+
+      var result = importHelper.importAndTransform(
+          inputs.dataSourceSysId,
+          inputs.transformMapSysId
+      );
+
+      if (result) {
+          outputs.import_set_sys_id = result.import_set_sys_id;
+      }
+
+  })(inputs, outputs);
+
+OUTPUTS — Click [+ Create Output]:
+  Label          Name               Type
+  -------------- ---------------    ------
+  Import Set Sys ID import_set_sys_id String
+
+Wire the output: in the script step's output mapping, map
+  import_set_sys_id → import_set_sys_id (the Action output).
+
+Click [Save] then [Publish].
+
+------------------------------------------------------------------------
+STEP 9.10: UPDATE THE SYSTEM PROPERTY (REQUIRED BEFORE TESTING)
+------------------------------------------------------------------------
+Without this, Flow Designer cannot query sys_import_set_run and the
+import result lookup (Step 9.11 flow step 5) silently returns empty.
+
+  1. Type `sys_properties.list`.
+  2. Search for: sn_flow_designer.allowed_system_tables
+  3. Open the property. In Value, ADD sys_import_set_run to the list.
+     Before: sys_attachment,sys_email,...
+     After:  sys_attachment,sys_email,...,sys_import_set_run
+  4. Click [Update].
+
+------------------------------------------------------------------------
+STEP 9.11 (ARTIFACT F): BUILD THE BULK IMPORT FLOW
+------------------------------------------------------------------------
+Navigate: Flow Designer > Click [New] > [Flow].
+
+  Name        : WRM Bulk Import Trigger
+  Application : Workspace Reservation Management
+  Run as      : System User   ← REQUIRED
+  Trigger     : Service Catalog > Service Catalog Item Submitted
+  Catalog Item: Workspace Options Bulk Update
+
+FLOW STEP 1 — Lookup Record: Find the Data Source
+  Click [+] > [Action] > [Look Up Record]
+    Table     : Data Source [sys_data_source]
+    Condition : Name  is  WRM Workspace Options Bulk Import
+    Store as  : Data Source Record
+
+  WHY: Avoids hard-coding a sys_id that breaks on migration.
+
+FLOW STEP 2 — Lookup Record: Find the Attachment
+  Click [+] > [Action] > [Look Up Record]
+    Table      : Attachment [sys_attachment]
+    Conditions:
+      Table name   is   sc_req_item
+      Table sys ID is   [Trigger > Requested Item Record > Sys ID]
+    Store as   : Attachment Record
+
+FLOW STEP 3 — Move Attachments: Move File to the Data Source
+  Click [+] > [Action] > [Move Attachments]
+    Source Attachment Record : [Step 2 > Attachment Record]
+    Target record            : [Step 1 > Data Source Record]
+
+  CRITICAL — Source field must be Step 2 > Attachment Record.
+  Do NOT use Trigger > Requested Item Record for the source — that passes
+  the RITM record (sc_req_item) but the action expects a sys_attachment
+  record. Passing the RITM causes the error:
+    "The Record type sc_req_item does not match with Attachment table type."
+
+  WHY THIS STEP IS REQUIRED:
+    The file was uploaded to the RITM (sc_req_item). GlideImportSetLoader
+    reads from the DATA SOURCE record (File Retrieval Method = Attachment).
+    Without this move, the loader finds nothing and silently imports zero
+    rows with no error — a very hard failure to diagnose.
+    After this step the file lives on the Data Source and the loader
+    finds it correctly.
+
+  [Senior Note]: Identified in the Kalisha_m Community article (flow images)
+    and confirmed in the article comments by HulonB.
+
+FLOW STEP 4 — Action: Import Workspace Data
+  Click [+] > [Action] > [Import Workspace Data]
+    Data Source Sys ID   : [Step 1 > Data Source Record > Sys ID]
+    Transform Map Sys ID : (paste your Transform Map sys_id — static string)
+
+  HOW TO GET TRANSFORM MAP SYS_ID:
+    1. Type `sys_transform_map.list`.
+    2. Open "WRM Workspace Options Bulk Transform."
+    3. Copy sys_id from the URL bar.
+
+FLOW STEP 5 — Lookup Record: Find Attachment on Data Source
+  Click [+] > [Action] > [Look Up Record]
+    Table      : Attachment [sys_attachment]
+    Conditions:
+      Table name   is   sys_data_source  (typed as literal text)
+      Table sys ID is   [Step 1 > Data Source Record > Sys ID]
+    Store as   : Data Source Attachment Record
+
+  WHY: After the Move in Step 3, the file now lives on the Data Source
+  record. We look it up here so we can delete it in Step 6.
+  Using the Data Source as the parent (not the RITM) ensures we always
+  find the right file even if a previous run left an old file behind.
+
+FLOW STEP 6 — Delete Record: Clean Up the Attachment
+  Click [+] > [Action] > [Delete Record]
+    Record: [Step 5 > Data Source Attachment Record]
+
+  WHY: Data hygiene — the file has been processed. Deleting from the
+  Data Source record (not the RITM) ensures the Data Source is clean
+  for the next run. If you delete from the RITM reference instead, old
+  files can accumulate on the Data Source and get re-processed on the
+  next import, causing duplicate or stale data.
+
+FLOW STEP 7 — Lookup Record: Get Import Results
+  Click [+] > [Action] > [Look Up Record]
+    Table      : Transform History [sys_import_set_run]
+    Conditions:
+      Import set  is  [Step 4 > Action > Import Set Sys ID]
+      State       is (one of)  complete, complete_error
+    Store as  : Transform History Record
+
+  WHY: sys_import_set_run holds row counts (Insert, Update, Error, Ignore).
+  Used in the results email to give the manager actual numbers.
+
+FLOW STEP 8 — Update Record: Close the RITM
+  Click [+] > [Action] > [Update Record]
+    Record : Trigger > Requested Item Record
+    Field  : State
+    Value  : Closed Complete
+
+FLOW STEP 9 — Send Email: Results to Manager
+  Click [+] > [Action] > [Send Email]
+    Table         : Requested Item [sc_req_item]
+    Target record : [Trigger > Requested Item Record]
+    To            : [Trigger > Requested Item Record > Opened by > Email]
+    Subject       : Workspace Options Bulk Import Complete —
+                    [Trigger > Requested Item Record > Number]
+
+  NOTE on Table and Target record: Always fill these in. They attach the
+  sent email to the RITM's activity history so agents have an audit trail.
+  Without them the email fires but is not associated with any record.
+
+  NOTE on Option B (standalone Notification record):
+  Do NOT create a separate Notification record that also fires on
+  Closed Complete for this catalog item. If both are active, the manager
+  receives two emails for every import. Choose one or the other.
+  The flow Send Email (Step 9) is preferred because it includes row counts
+  from the Transform History that a standalone Notification cannot access.
+
+  Body (HTML — switch to source view, paste, then insert data pills):
+
+  <p>Hi [PILL: Trigger > Requested Item > Opened by > First name],</p>
+  <p>Your workspace bulk import for
+  <strong>[PILL: Trigger > Requested Item > Number]</strong>
+  is complete.</p>
+  <table style="border-collapse:collapse;width:100%;max-width:600px;">
+    <tr>
+      <td style="padding:8px;border:1px solid #ccc;background:#f5f5f5;">
+          <strong>Rows Inserted</strong></td>
+      <td style="padding:8px;border:1px solid #ccc;">
+          [PILL: Step 7 > Transform History Record > Insert]</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid #ccc;background:#f5f5f5;">
+          <strong>Rows Updated</strong></td>
+      <td style="padding:8px;border:1px solid #ccc;">
+          [PILL: Step 7 > Transform History Record > Update]</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid #ccc;background:#f5f5f5;">
+          <strong>Rows Errored</strong></td>
+      <td style="padding:8px;border:1px solid #ccc;">
+          [PILL: Step 7 > Transform History Record > Error]</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid #ccc;background:#f5f5f5;">
+          <strong>Rows Skipped</strong></td>
+      <td style="padding:8px;border:1px solid #ccc;">
+          [PILL: Step 7 > Transform History Record > Ignore]</td>
+    </tr>
+  </table>
+  <p>To review: <strong>All > Workspace Reservation Management >
+  Workspace Options</strong></p>
+  <p>Thank you,<br/>Workspace Management Team</p>
+
+  Replace each [PILL: ...] marker with the actual data pill from the
+  picker. The exact field names on sys_import_set_run are:
+    Insert (not "Inserted"), Update (not "Updated"),
+    Error (not "Errored"), Ignore (not "Ignored").
+  Use exactly what the picker shows — do not type these manually.
+
+Click [Save] then [Activate].
+
+CONNECT FLOW TO CATALOG ITEM:
+  1. Type `sc_cat_item.list` > open Workspace Options Bulk Update.
+  2. Click [Process Engine] tab.
+  3. Find the "Flow" field > select: WRM Bulk Import Trigger.
+  4. Click [Update].
+
+------------------------------------------------------------------------
+STEP 9.12: RESULTS EMAIL — FLOW VS STANDALONE NOTIFICATION
+------------------------------------------------------------------------
+The results email is handled by Flow Step 9 (Send Email) above.
+Do NOT also create a standalone Notification record for the same
+Closed Complete / Workspace Options Bulk Update condition — both would
+fire at the same moment and the manager would receive two emails.
+
+  OPTION A — Flow Send Email (Step 9 above): RECOMMENDED
+    Use this. It has access to row counts from Transform History.
+
+  OPTION B — Standalone Notification Record (alternative only)
+    Use ONLY if you remove Step 9 from the flow first.
+    Navigate: `sysevent_email_action.list` — Click [New].
+      Name       : Workspace Bulk Import Complete
+      Table      : Requested Item [sc_req_item]
+      Application: Workspace Reservation Management
+      Active     : Checked
+      WHEN: State changes to Closed Complete
+            AND  Cat item is  Workspace Options Bulk Update
+      WHO : Opened by
+      Subject: Workspace Options Bulk Import Complete — ${number}
+    Limitation: cannot include row counts — no access to sys_import_set_run.
+
+------------------------------------------------------------------------
+VERIFY: FULL STORY 21 CHECKLIST
+------------------------------------------------------------------------
+PRE-CHECK:
+  ☐ Catalog item Active, Mandatory Attachment enabled
+  ☐ Data Source — File Retrieval Method = Attachment
+  ☐ Transform Map — 6 field maps, Coalesce on workspace_name (index warning = OK)
+  ☐ Location field map — Coerce = Name (or script)
+  ☐ importOnDemand Script Include — Application = Global
+  ☐ Import Workspace Data Flow Action — Published
+  ☐ WRM Bulk Import Trigger Flow has 9 steps (see Step 9.11), Active,
+    Run as System User
+  ☐ Flow connected via Process Engine tab on catalog item
+  ☐ System property sn_flow_designer.allowed_system_tables
+    includes sys_import_set_run
+  ☐ NO standalone Notification record also triggering on Closed Complete
+    for this catalog item (would cause duplicate emails)
+
+TEST 1 — End-to-end import:
+  Submit Workspace Options Bulk Update via Service Portal.
+  Attach: WRM_Workspace_Bulk_Import_Sample.xlsx (10 rows). Submit.
+  PASS: RITM created.
+  PASS: Import Set has 10 rows. Check: [System Import Sets] > [Import Sets].
+  PASS: 10 Workspace Options records created/updated.
+  PASS: Location field populated on all records.
+  PASS: Attachment deleted from both RITM and Data Source.
+  PASS: RITM State = Closed Complete.
+  PASS: Manager receives email. Row counts in email match import set.
+
+TEST 2 — Re-import does NOT create duplicates:
+  Submit again with the same Excel file.
+  PASS: Still 10 records (no duplicates).
+  PASS: Email shows 0 inserted, 10 updated.
+
+TEST 3 — Incremental import adds only new rows:
+  Submit with a new file containing 3 records (all new workspace_names).
+  PASS: 3 records added; total = 13.
+  PASS: Email shows 3 inserted, 0 updated, 0 errored, 0 skipped.
+
+TROUBLESHOOTING:
+  Import Set has 0 rows / nothing imported, no error shown —
+    Missing or mis-configured Move Attachments step (Step 3). The file
+    is still on the RITM, not on the Data Source. Verify:
+      Source Attachment Record = [Step 2 > Attachment Record]  (NOT the RITM)
+      Target record = [Step 1 > Data Source Record]
+    Passing the RITM as the source causes the error:
+      "The Record type sc_req_item does not match with Attachment table type."
+
+  Workspace records duplicated on re-import —
+    Coalesce not ticked on workspace_name field map. Open the Transform Map
+    field maps, tick Coalesce on workspace_name, click OK on the index
+    warning (this creates the database index — correct behavior).
+
+  Email shows stale/old row counts (e.g., 10 rows skipped on a 3-row file) —
+    Old Excel file was not deleted from the Data Source record. The stale file
+    is being re-processed. Verify Step 5 looks up sys_attachment where
+    table_name = sys_data_source AND table_sys_id = [Step 1 > DS Sys ID],
+    and Step 6 deletes [Step 5 > Data Source Attachment Record].
+
+  Email body shows literal text like {OpenedBy} or {RITM_Number} —
+    These were typed manually. Flow Designer Send Email requires data pills
+    inserted via the pill picker. Re-open Step 9, delete the typed tokens,
+    and insert data pills from the pill picker for each field.
+
+  "importOnDemand is not defined" —
+    Script Include Application must be Global.
+    In flow action script, prefix must be: new global.importOnDemand()
+
+  Step 7 (Transform History lookup) returns empty —
+    Update sn_flow_designer.allowed_system_tables to include sys_import_set_run.
+
+  "invalid pharmacy compound uuid" —
+    Delete the Send Email step entirely and re-add it from scratch.
+
+  Location blank after transform —
+    Excel text doesn't exactly match cmn_location.name. Run cmn_location.list
+    and compare. Switch to Option B script in the field map if needed.
+
+Close update set: WRM STRY0021 > State = Complete.
+
+
+================================================================================
+10. COMPLETE VALIDATION & TESTING
+================================================================================
+
+Test 1 — Catalog Validation (Story 15)
+  Select workspace → PASS: Location auto-populates.
+  Set End before Start → PASS: Error fires. End clears.
+  Set valid End. Submit → PASS: RITM created.
+
+Test 2 — Discord + Approval Flow (Story 16)
+  Submit reservation. Approve as Workspace Agents member.
+  PASS: WRT created. All fields. Status=Pending check-in. State=Open.
+        Assignment group=Workspace Agents. RITM=Closed Complete.
+  PASS: Discord ✅ with clickable WRT link.
+  Submit another. Reject.
+  PASS: No WRT. RITM=Closed Incomplete. Discord ❌. Rejection email sent.
+
+Test 3 — ACLs (Story 17)
+  Impersonate wrm_user — cannot write Workspace Options.
+  Impersonate wrm_admin — can create/write Workspace Options.
+  Impersonate no-role user — denied access to Reservation Tracker.
+
+Test 4 — Confirmation Email (Story 18)
+  Approve a RITM → PASS: submitter receives confirmation email.
+  Save RITM again → PASS: no second email.
+
+Test 5 — SLA (Story 19)
+  Submit WRM RITM → PASS: Task SLA = In Progress, Target = 4:00:00.
+  Submit non-WRM RITM → PASS: No WRM SLA appears.
+
+Test 6 — Check-Out Notification (Story 20)
+  Check out a WRT → PASS: Assigned agent receives inspection email.
+
+Test 7 — Bulk Import (Story 21)
+  Upload Excel via catalog item.
+  PASS: Import Set rows = Excel rows. WRO records created/updated.
+  PASS: Manager receives email with row counts.
+  Re-upload → PASS: no duplicates.
+
+
+================================================================================
+11. QUICK REFERENCE — FILTER NAVIGATOR SHORTCUTS
+================================================================================
+  sys_app.list                    — Find your scope prefix
+  sys_update_set.list             — Manage update sets
+  catalog_script_client.list      — Catalog Client Scripts
+  sc_cat_item.list                — Catalog Items
+  sys_user_group.list             — User Groups
+  sys_properties.list             — System Properties
+  sys_script_include.list         — Script Includes
+  wf_workflow.list                — Workflows (SLA cloning)
+  agreement_service_level.list    — SLA Definitions
+  task_sla.list                   — Task SLA timers
+  sysevent_email_action.list      — Notifications
+  sys_security_acl.list           — ACL records
+  sys_data_source.list            — Data Sources
+  sys_transform_map.list          — Transform Maps
+  sys_import_set_row.list         — Import Set staged rows
+  sc_req_item.list                — Requested Items (RITMs)
+  x_#####_wrm_reservation_tracker.list  — Reservation Tracker
+  x_#####_wrm_workspace_options.list    — Workspace Options
+  sys.scripts.do                  — Scripts - Background (testing)
+  sys_email.list                  — Sent email log
+
+
+================================================================================
+12. ARTIFACT SUMMARY TABLE
+================================================================================
+
+  Artifact Name                        Type              Story  Scope
+  ------------------------------------ ---------------- ------- ------
+  WRM STRY0015 update set              Update Set        15     WRM
+  Validate Reservation Dates           Cat Client Script 15     WRM
+  WRM STRY0016 update set              Update Set        16     WRM
+  Workspace Agents                     Group             16     Global
+  x_#####_wrm.discord.webhook_url      System Property   16     WRM
+  discordNotification                  Script Include    16     WRM
+  Send Discord Approval Notification   Flow Action       16     WRM
+  Send Discord Rejection Notification  Flow Action       16     WRM
+  Workspace Reservation                Flow              16     WRM
+  WRM STRY0017 update set              Update Set        17     WRM
+  ACLs (12 records, 3 tables)          Access Control    17     WRM
+  WRM STRY0018 update set              Update Set        18     WRM
+  Workspace Reservation Confirmation   Notification      18     WRM
+  WRM STRY0019 update set              Update Set        19     WRM
+  Workspace Reservation Fulfillment SLA SLA Definition   19     WRM
+  WRM Reservation SLA Workflow         Workflow          19     Global
+  WRM STRY0020 update set              Update Set        20     WRM
+  Workspace Check Required - Checked Out Notification    20     WRM
+  WRM STRY0021 update set              Update Set        21     WRM
+  Workspace Options Bulk Update        Catalog Item      21     WRM
+  WRM Workspace Options Bulk Import    Data Source       21     WRM
+  WRM Workspace Options Bulk Transform Transform Map     21     WRM
+  importOnDemand                       Script Include    21     GLOBAL
+  Import Workspace Data                Flow Action       21     WRM
+  WRM Bulk Import Trigger              Flow              21     WRM
+  Workspace Bulk Import Complete       Notification      21     WRM
+
+================================================================================
+END OF TECHNICAL MANUAL — SPRINT 2 (VERSION 4)
+AdvanceNow(TM) LLC | ServiceNow Zurich Release
+================================================================================
